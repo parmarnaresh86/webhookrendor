@@ -1,0 +1,12 @@
+{
+  "name": "webhookrendor",
+  "version": "1.0.0",
+  "description": "WhatsApp Cloud API webhook receiver",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
