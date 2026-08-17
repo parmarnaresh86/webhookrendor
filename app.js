@@ -1,6 +1,6 @@
 // Import Express.js
 const express = require('express');
-const { getItems, findSalesOrderByDocNum, getSalesOrderPdf } = require('./sap');
+const { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem } = require('./sap');
 const { sendText, sendPdf, sendButtonMenu } = require('./whatsapp');
 
 // Create an Express app
@@ -43,12 +43,16 @@ const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
   { id: 'menu_items', title: '📦 Items List' },
-  { id: 'menu_so_print', title: '🖨️ SO Print' }
+  { id: 'menu_so_print', title: '🖨️ SO Print' },
+  { id: 'menu_create_item', title: '➕ Create Item' }
 ];
 
 // In-memory per-sender conversation state. Fine for a single-instance deployment;
 // would need a shared store (e.g. Redis) if this ever runs with multiple instances.
-const pendingSalesOrderPrint = new Set();
+// state shapes: { step: 'awaiting_so_docnum' }
+//               { step: 'awaiting_item_code' }
+//               { step: 'awaiting_item_name', itemCode }
+const userState = new Map();
 
 async function sendMainMenu(from) {
   await sendButtonMenu(from, 'Hello! How can I help you today?', MENU_BUTTONS);
@@ -85,23 +89,82 @@ async function handleSalesOrderDocNum(from, docNumRaw) {
   }
 }
 
+async function startSalesOrderPrint(from) {
+  userState.set(from, { step: 'awaiting_so_docnum' });
+  await sendText(from, 'Please enter the Sales Order document number.');
+}
+
+async function startCreateItem(from) {
+  userState.set(from, { step: 'awaiting_item_code' });
+  await sendText(from, 'Please enter the new Item Code.');
+}
+
+async function handleItemCodeStep(from, itemCodeRaw) {
+  const itemCode = itemCodeRaw.trim();
+  if (!itemCode) {
+    await sendText(from, 'Item Code cannot be empty. Please enter the Item Code.');
+    return;
+  }
+  userState.set(from, { step: 'awaiting_item_name', itemCode });
+  await sendText(from, 'Please enter the Item Name.');
+}
+
+async function handleItemNameStep(from, itemName, itemCode) {
+  const trimmedName = itemName.trim();
+  if (!trimmedName) {
+    await sendText(from, 'Item Name cannot be empty. Please enter the Item Name.');
+    return;
+  }
+  userState.set(from, { step: 'awaiting_item_confirm', itemCode, itemName: trimmedName });
+  await sendButtonMenu(
+    from,
+    `Confirm new item:\nCode: ${itemCode}\nName: ${trimmedName}`,
+    [
+      { id: 'create_item_save', title: '✅ Save' },
+      { id: 'create_item_cancel', title: '❌ Cancel' }
+    ]
+  );
+}
+
+async function saveNewItem(from, itemCode, itemName) {
+  try {
+    await createItem(itemCode, itemName);
+    await sendText(from, `Item created successfully:\nCode: ${itemCode}\nName: ${itemName}`);
+  } catch (err) {
+    console.error('Failed to create item:', err.message);
+    const detail = err.response?.data?.message || err.message;
+    await sendText(from, `Sorry, could not create the item. ${detail}`);
+  }
+}
+
 async function handleIncomingText(from, text) {
   const trimmed = text.trim();
+  const state = userState.get(from);
 
-  if (pendingSalesOrderPrint.has(from)) {
-    pendingSalesOrderPrint.delete(from);
+  if (state?.step === 'awaiting_so_docnum') {
+    userState.delete(from);
     await handleSalesOrderDocNum(from, trimmed);
     return;
   }
 
+  if (state?.step === 'awaiting_item_code') {
+    await handleItemCodeStep(from, trimmed);
+    return;
+  }
+
+  if (state?.step === 'awaiting_item_name') {
+    await handleItemNameStep(from, trimmed, state.itemCode);
+    return;
+  }
+
   if (GREETING_KEYWORD.test(trimmed)) {
+    userState.delete(from);
     await sendMainMenu(from);
     return;
   }
 
   if (SALES_ORDER_PRINT_KEYWORD.test(trimmed)) {
-    pendingSalesOrderPrint.add(from);
-    await sendText(from, 'Please enter the Sales Order document number.');
+    await startSalesOrderPrint(from);
     return;
   }
 
@@ -114,8 +177,18 @@ async function handleButtonReply(from, buttonId) {
   if (buttonId === 'menu_items') {
     await handleItemsRequest(from);
   } else if (buttonId === 'menu_so_print') {
-    pendingSalesOrderPrint.add(from);
-    await sendText(from, 'Please enter the Sales Order document number.');
+    await startSalesOrderPrint(from);
+  } else if (buttonId === 'menu_create_item') {
+    await startCreateItem(from);
+  } else if (buttonId === 'create_item_save') {
+    const state = userState.get(from);
+    userState.delete(from);
+    if (state?.step === 'awaiting_item_confirm') {
+      await saveNewItem(from, state.itemCode, state.itemName);
+    }
+  } else if (buttonId === 'create_item_cancel') {
+    userState.delete(from);
+    await sendText(from, 'Item creation cancelled.');
   }
 }
 

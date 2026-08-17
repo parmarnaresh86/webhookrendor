@@ -89,4 +89,17 @@ async function getSalesOrderPdf(order) {
   return Buffer.from(data.base64Pdf, 'base64');
 }
 
-module.exports = { getItems, findSalesOrderByDocNum, getSalesOrderPdf };
+const DEFAULT_ITEMS_GROUP_CODE = 100;
+
+async function createItem(itemCode, itemName) {
+  return callSapApi('/api/items/create', {
+    method: 'POST',
+    data: {
+      ItemCode: itemCode,
+      ItemName: itemName,
+      ItemsGroupCode: DEFAULT_ITEMS_GROUP_CODE
+    }
+  });
+}
+
+module.exports = { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem };
