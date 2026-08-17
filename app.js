@@ -1,7 +1,7 @@
 // Import Express.js
 const express = require('express');
 const { getItems, findSalesOrderByDocNum, getSalesOrderPdf } = require('./sap');
-const { sendText, sendPdf } = require('./whatsapp');
+const { sendText, sendPdf, sendButtonMenu } = require('./whatsapp');
 
 // Create an Express app
 const app = express();
@@ -39,10 +39,30 @@ function formatItemList(items) {
 }
 
 const SALES_ORDER_PRINT_KEYWORD = /^(print sales order|so print)$/i;
+const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
+
+const MENU_BUTTONS = [
+  { id: 'menu_items', title: '📦 Items List' },
+  { id: 'menu_so_print', title: '🖨️ SO Print' }
+];
 
 // In-memory per-sender conversation state. Fine for a single-instance deployment;
 // would need a shared store (e.g. Redis) if this ever runs with multiple instances.
 const pendingSalesOrderPrint = new Set();
+
+async function sendMainMenu(from) {
+  await sendButtonMenu(from, 'Hello! How can I help you today?', MENU_BUTTONS);
+}
+
+async function handleItemsRequest(from) {
+  try {
+    const items = await getItems();
+    await sendText(from, formatItemList(items));
+  } catch (err) {
+    console.error('Failed to fetch/send item list:', err.message);
+    await sendText(from, 'Sorry, could not fetch the item list right now. Please try again later.');
+  }
+}
 
 async function handleSalesOrderDocNum(from, docNumRaw) {
   const docNum = Number(docNumRaw.trim());
@@ -65,12 +85,17 @@ async function handleSalesOrderDocNum(from, docNumRaw) {
   }
 }
 
-async function handleIncomingMessage(from, text) {
+async function handleIncomingText(from, text) {
   const trimmed = text.trim();
 
   if (pendingSalesOrderPrint.has(from)) {
     pendingSalesOrderPrint.delete(from);
     await handleSalesOrderDocNum(from, trimmed);
+    return;
+  }
+
+  if (GREETING_KEYWORD.test(trimmed)) {
+    await sendMainMenu(from);
     return;
   }
 
@@ -81,13 +106,16 @@ async function handleIncomingMessage(from, text) {
   }
 
   if (ITEMS_KEYWORD.test(trimmed)) {
-    try {
-      const items = await getItems();
-      await sendText(from, formatItemList(items));
-    } catch (err) {
-      console.error('Failed to fetch/send item list:', err.message);
-      await sendText(from, 'Sorry, could not fetch the item list right now. Please try again later.');
-    }
+    await handleItemsRequest(from);
+  }
+}
+
+async function handleButtonReply(from, buttonId) {
+  if (buttonId === 'menu_items') {
+    await handleItemsRequest(from);
+  } else if (buttonId === 'menu_so_print') {
+    pendingSalesOrderPrint.add(from);
+    await sendText(from, 'Please enter the Sales Order document number.');
   }
 }
 
@@ -103,8 +131,12 @@ app.post('/', (req, res) => {
   if (messages && messages.length) {
     for (const message of messages) {
       if (message.type === 'text') {
-        handleIncomingMessage(message.from, message.text.body).catch((err) =>
+        handleIncomingText(message.from, message.text.body).catch((err) =>
           console.error('Error handling message:', err.message)
+        );
+      } else if (message.type === 'interactive' && message.interactive?.type === 'button_reply') {
+        handleButtonReply(message.from, message.interactive.button_reply.id).catch((err) =>
+          console.error('Error handling button reply:', err.message)
         );
       }
     }
