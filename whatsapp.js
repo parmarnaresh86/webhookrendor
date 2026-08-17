@@ -17,4 +17,35 @@ async function sendText(to, body) {
   );
 }
 
-module.exports = { sendText };
+async function uploadMedia(buffer, filename, mimeType) {
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', new Blob([buffer], { type: mimeType }), filename);
+
+  const { data } = await axios.post(
+    `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/media`,
+    form,
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+  );
+  return data.id;
+}
+
+async function sendDocument(to, mediaId, filename) {
+  await axios.post(
+    `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'document',
+      document: { id: mediaId, filename }
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+  );
+}
+
+async function sendPdf(to, buffer, filename) {
+  const mediaId = await uploadMedia(buffer, filename, 'application/pdf');
+  await sendDocument(to, mediaId, filename);
+}
+
+module.exports = { sendText, sendPdf };

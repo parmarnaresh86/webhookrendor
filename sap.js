@@ -69,4 +69,24 @@ async function getItems() {
   return callSapApi('/api/items');
 }
 
-module.exports = { getItems };
+const SALES_ORDER_DOC_CODE = 'RDR20007';
+
+async function findSalesOrderByDocNum(docNum) {
+  const data = await callSapApi('/api/sales-order/list', { params: { docNum, pageSize: 1 } });
+  return data.orders && data.orders[0] ? data.orders[0] : null;
+}
+
+async function getSalesOrderPdf(order) {
+  const data = await callSapApi('/api/document-print/salesOrder/download-pdf', {
+    method: 'POST',
+    data: {
+      docEntry: order.doc_entry,
+      docNum: order.doc_num,
+      cardCode: order.customer_code,
+      docCode: SALES_ORDER_DOC_CODE
+    }
+  });
+  return Buffer.from(data.base64Pdf, 'base64');
+}
+
+module.exports = { getItems, findSalesOrderByDocNum, getSalesOrderPdf };

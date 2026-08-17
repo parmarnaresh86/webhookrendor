@@ -1,7 +1,7 @@
 // Import Express.js
 const express = require('express');
-const { getItems } = require('./sap');
-const { sendText } = require('./whatsapp');
+const { getItems, findSalesOrderByDocNum, getSalesOrderPdf } = require('./sap');
+const { sendText, sendPdf } = require('./whatsapp');
 
 // Create an Express app
 const app = express();
@@ -38,8 +38,49 @@ function formatItemList(items) {
   return `Item List (showing ${top.length} of ${items.length}):\n\n${lines.join('\n')}${suffix}`;
 }
 
+const SALES_ORDER_PRINT_KEYWORD = /^(print sales order|so print)$/i;
+
+// In-memory per-sender conversation state. Fine for a single-instance deployment;
+// would need a shared store (e.g. Redis) if this ever runs with multiple instances.
+const pendingSalesOrderPrint = new Set();
+
+async function handleSalesOrderDocNum(from, docNumRaw) {
+  const docNum = Number(docNumRaw.trim());
+  if (!Number.isInteger(docNum)) {
+    await sendText(from, 'Please enter a valid numeric document number.');
+    return;
+  }
+
+  try {
+    const order = await findSalesOrderByDocNum(docNum);
+    if (!order) {
+      await sendText(from, `No Sales Order found with document number ${docNum}.`);
+      return;
+    }
+    const pdfBuffer = await getSalesOrderPdf(order);
+    await sendPdf(from, pdfBuffer, `sales-order-${docNum}.pdf`);
+  } catch (err) {
+    console.error('Failed to fetch/send Sales Order PDF:', err.message);
+    await sendText(from, 'Sorry, could not generate the Sales Order PDF right now. Please try again later.');
+  }
+}
+
 async function handleIncomingMessage(from, text) {
-  if (ITEMS_KEYWORD.test(text.trim())) {
+  const trimmed = text.trim();
+
+  if (pendingSalesOrderPrint.has(from)) {
+    pendingSalesOrderPrint.delete(from);
+    await handleSalesOrderDocNum(from, trimmed);
+    return;
+  }
+
+  if (SALES_ORDER_PRINT_KEYWORD.test(trimmed)) {
+    pendingSalesOrderPrint.add(from);
+    await sendText(from, 'Please enter the Sales Order document number.');
+    return;
+  }
+
+  if (ITEMS_KEYWORD.test(trimmed)) {
     try {
       const items = await getItems();
       await sendText(from, formatItemList(items));
