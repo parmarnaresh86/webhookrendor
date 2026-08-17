@@ -1,6 +1,6 @@
 // Import Express.js
 const express = require('express');
-const { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem } = require('./sap');
+const { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem, getCustomerBalance } = require('./sap');
 const { sendText, sendPdf, sendButtonMenu } = require('./whatsapp');
 
 // Create an Express app
@@ -39,12 +39,17 @@ function formatItemList(items) {
 }
 
 const SALES_ORDER_PRINT_KEYWORD = /^(print sales order|so print)$/i;
+const CUSTOMER_BALANCE_KEYWORD = /^(customer balance|balance)$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
   { id: 'menu_items', title: '📦 Items List' },
   { id: 'menu_so_print', title: '🖨️ SO Print' },
   { id: 'menu_create_item', title: '➕ Create Item' }
+];
+
+const SECONDARY_MENU_BUTTONS = [
+  { id: 'menu_customer_balance', title: '💰 Customer Balance' }
 ];
 
 // In-memory per-sender conversation state. Fine for a single-instance deployment;
@@ -55,7 +60,10 @@ const MENU_BUTTONS = [
 const userState = new Map();
 
 async function sendMainMenu(from) {
+  // WhatsApp interactive button messages support a max of 3 buttons,
+  // so the menu is split across two messages.
   await sendButtonMenu(from, 'Hello! How can I help you today?', MENU_BUTTONS);
+  await sendButtonMenu(from, 'More options:', SECONDARY_MENU_BUTTONS);
 }
 
 async function handleItemsRequest(from) {
@@ -126,6 +134,37 @@ async function handleItemNameStep(from, itemName, itemCode) {
   );
 }
 
+async function startCustomerBalance(from) {
+  userState.set(from, { step: 'awaiting_customer_code' });
+  await sendText(from, 'Please enter the Customer Code.');
+}
+
+async function handleCustomerCodeStep(from, cardCodeRaw) {
+  const cardCode = cardCodeRaw.trim();
+  if (!cardCode) {
+    await sendText(from, 'Customer Code cannot be empty. Please enter the Customer Code.');
+    return;
+  }
+
+  try {
+    const bp = await getCustomerBalance(cardCode);
+    const balance = bp.CurrentAccountBalance ?? 0;
+    await sendText(
+      from,
+      `Customer: ${bp.CardName || cardCode}\nCode: ${bp.CardCode || cardCode}\nOutstanding Balance: ${balance}`
+    );
+  } catch (err) {
+    console.error('Failed to fetch customer balance:', err.message);
+    const notFound = err.response?.status === 404;
+    await sendText(
+      from,
+      notFound
+        ? `No customer found with code ${cardCode}.`
+        : 'Sorry, could not fetch the customer balance right now. Please try again later.'
+    );
+  }
+}
+
 async function saveNewItem(from, itemCode, itemName) {
   try {
     await createItem(itemCode, itemName);
@@ -157,6 +196,12 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (state?.step === 'awaiting_customer_code') {
+    userState.delete(from);
+    await handleCustomerCodeStep(from, trimmed);
+    return;
+  }
+
   if (GREETING_KEYWORD.test(trimmed)) {
     userState.delete(from);
     await sendMainMenu(from);
@@ -165,6 +210,11 @@ async function handleIncomingText(from, text) {
 
   if (SALES_ORDER_PRINT_KEYWORD.test(trimmed)) {
     await startSalesOrderPrint(from);
+    return;
+  }
+
+  if (CUSTOMER_BALANCE_KEYWORD.test(trimmed)) {
+    await startCustomerBalance(from);
     return;
   }
 
@@ -180,6 +230,8 @@ async function handleButtonReply(from, buttonId) {
     await startSalesOrderPrint(from);
   } else if (buttonId === 'menu_create_item') {
     await startCreateItem(from);
+  } else if (buttonId === 'menu_customer_balance') {
+    await startCustomerBalance(from);
   } else if (buttonId === 'create_item_save') {
     const state = userState.get(from);
     userState.delete(from);

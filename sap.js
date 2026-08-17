@@ -89,6 +89,10 @@ async function getSalesOrderPdf(order) {
   return Buffer.from(data.base64Pdf, 'base64');
 }
 
+async function getCustomerBalance(cardCode) {
+  return callSapApi(`/api/business-partners/${encodeURIComponent(cardCode)}`);
+}
+
 const DEFAULT_ITEMS_GROUP_CODE = 100;
 
 async function createItem(itemCode, itemName) {
@@ -102,4 +106,4 @@ async function createItem(itemCode, itemName) {
   });
 }
 
-module.exports = { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem };
+module.exports = { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem, getCustomerBalance };
