@@ -1,6 +1,13 @@
 // Import Express.js
 const express = require('express');
-const { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem, getCustomerBalance } = require('./sap');
+const {
+  getItems,
+  findSalesOrderByDocNum,
+  getSalesOrderPdf,
+  createItem,
+  getCustomerBalance,
+  submitApprovalDecision
+} = require('./sap');
 const { sendText, sendPdf, sendButtonMenu } = require('./whatsapp');
 
 // Create an Express app
@@ -241,6 +248,58 @@ async function handleButtonReply(from, buttonId) {
   } else if (buttonId === 'create_item_cancel') {
     userState.delete(from);
     await sendText(from, 'Item creation cancelled.');
+  } else if (buttonId.startsWith('approve_')) {
+    await handleApprovalDecision(from, buttonId.slice('approve_'.length), 'approved');
+  } else if (buttonId.startsWith('reject_')) {
+    await handleApprovalDecision(from, buttonId.slice('reject_'.length), 'rejected');
+  }
+}
+
+function formatApprovalMessage({ documentType, customerName, items, grandTotal }) {
+  const lines = (items || []).map(
+    (item) => `- ${item.itemName} | Qty: ${item.quantity} | Price: ${item.price} | Total: ${item.total}`
+  );
+  return (
+    `New ${documentType || 'Document'} Approval Request\n\n` +
+    `Customer: ${customerName}\n\n` +
+    `${lines.join('\n')}\n\n` +
+    `Grand Total: ${grandTotal}\n\n` +
+    `Please approve or reject:`
+  );
+}
+
+// Called by the SAP backend when a draft document enters approval status.
+// Protected by a shared secret so random requests can't trigger fake
+// approval messages to real approvers.
+app.post('/notify-approval', (req, res) => {
+  const providedSecret = req.headers['x-internal-token'];
+  if (!process.env.APPROVAL_NOTIFY_SECRET || providedSecret !== process.env.APPROVAL_NOTIFY_SECRET) {
+    res.status(401).json({ success: false, message: 'Unauthorized' });
+    return;
+  }
+
+  const { approverPhone, draftId, documentType, customerName, items, grandTotal } = req.body || {};
+  if (!approverPhone || !draftId) {
+    res.status(400).json({ success: false, message: 'approverPhone and draftId are required' });
+    return;
+  }
+
+  res.status(200).json({ success: true });
+
+  sendButtonMenu(approverPhone, formatApprovalMessage({ documentType, customerName, items, grandTotal }), [
+    { id: `approve_${draftId}`, title: '✅ Approve' },
+    { id: `reject_${draftId}`, title: '❌ Reject' }
+  ]).catch((err) => console.error('Failed to send approval notification:', err.message));
+});
+
+async function handleApprovalDecision(from, draftId, decision) {
+  try {
+    await submitApprovalDecision(draftId, decision, `whatsapp:${from}`);
+    await sendText(from, `Document ${draftId} has been ${decision}.`);
+  } catch (err) {
+    console.error('Failed to submit approval decision:', err.message);
+    const detail = err.response?.data?.message || err.message;
+    await sendText(from, `Sorry, could not record your decision for document ${draftId}. ${detail}`);
   }
 }
 

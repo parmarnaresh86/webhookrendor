@@ -106,4 +106,18 @@ async function createItem(itemCode, itemName) {
   });
 }
 
-module.exports = { getItems, findSalesOrderByDocNum, getSalesOrderPdf, createItem, getCustomerBalance };
+async function submitApprovalDecision(draftId, decision, decidedBy) {
+  return callSapApi(`/api/approvals/${encodeURIComponent(draftId)}/decision`, {
+    method: 'POST',
+    data: { decision, decidedBy }
+  });
+}
+
+module.exports = {
+  getItems,
+  findSalesOrderByDocNum,
+  getSalesOrderPdf,
+  createItem,
+  getCustomerBalance,
+  submitApprovalDecision
+};
