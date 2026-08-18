@@ -113,6 +113,10 @@ async function decideApproval(code, decision, remarks) {
   });
 }
 
+// Caller lowercases the input email before calling this (app.js). Service
+// Layer's OData filter here does an exact string match with no tolower()
+// support, so this assumes EmailAddress is stored lowercase in SAP - true
+// for the data checked so far (e.g. naresh.parmar@silvertouch.com).
 async function findCustomerByEmail(email) {
   const escaped = email.replace(/'/g, "''");
   const data = await callServiceLayer('/BusinessPartners', {

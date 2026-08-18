@@ -195,8 +195,16 @@ async function startServiceCall(from) {
   await sendText(from, 'Please enter your Email ID.');
 }
 
+async function sendServiceOptionsMenu(from, cardName) {
+  await sendButtonMenu(from, `Hello ${cardName}! What can I help you with?`, [
+    { id: 'svc_raise_issue', title: '🛠️ Raise Issue' },
+    { id: 'svc_book_service', title: '🔧 Service Call' },
+    { id: 'svc_book_visit', title: '📍 Book Visit' }
+  ]);
+}
+
 async function handleServiceEmailStep(from, emailRaw) {
-  const email = emailRaw.trim();
+  const email = emailRaw.trim().toLowerCase();
   if (!email) {
     await sendText(from, 'Email ID cannot be empty. Please enter your Email ID.');
     return;
@@ -216,11 +224,7 @@ async function handleServiceEmailStep(from, emailRaw) {
       cardName: customer.CardName
     });
 
-    await sendButtonMenu(from, `Hello ${customer.CardName}! What can I help you with?`, [
-      { id: 'svc_raise_issue', title: '🛠️ Raise Issue' },
-      { id: 'svc_book_service', title: '🔧 Service Call' },
-      { id: 'svc_book_visit', title: '📍 Book Visit' }
-    ]);
+    await sendServiceOptionsMenu(from, customer.CardName);
   } catch (err) {
     console.error('Failed to look up customer by email:', err.message);
     userState.delete(from);
@@ -250,6 +254,11 @@ async function handleServiceReasonStep(from, reasonRaw, state) {
       from,
       `Service Call created successfully.\n\nDoc No: ${serviceCall.DocNum}\nCustomer: ${state.cardName}\nSubject: ${state.subject}\nReason: ${reason}`
     );
+    userState.set(from, { step: 'awaiting_book_another', cardCode: state.cardCode, cardName: state.cardName });
+    await sendButtonMenu(from, 'Do you want to book another call?', [
+      { id: 'svc_another_yes', title: '✅ Yes' },
+      { id: 'svc_another_no', title: '❌ No' }
+    ]);
   } catch (err) {
     console.error('Failed to create service call:', err.message);
     const errData = err.response?.data?.error;
@@ -258,6 +267,22 @@ async function handleServiceReasonStep(from, reasonRaw, state) {
       err.response?.data?.message ||
       err.message;
     await sendText(from, `Sorry, could not create the Service Call. ${detail}`);
+  }
+}
+
+async function handleBookAnotherSelection(from, wantsAnother) {
+  const state = userState.get(from);
+  if (state?.step !== 'awaiting_book_another') return;
+
+  if (wantsAnother) {
+    userState.set(from, { step: 'awaiting_service_option', cardCode: state.cardCode, cardName: state.cardName });
+    await sendServiceOptionsMenu(from, state.cardName);
+  } else {
+    userState.delete(from);
+    await sendText(
+      from,
+      'Thank you for visiting STTL. Our representative will contact you shortly. Have a great day!'
+    );
   }
 }
 
@@ -490,6 +515,10 @@ async function handleButtonReply(from, buttonId) {
     await handleSoApprovalDecision(from, buttonId.slice('sl_decide_reject_'.length), 'rejected');
   } else if (Object.prototype.hasOwnProperty.call(SERVICE_CALL_SUBJECTS, buttonId)) {
     await handleServiceOptionSelection(from, buttonId);
+  } else if (buttonId === 'svc_another_yes') {
+    await handleBookAnotherSelection(from, true);
+  } else if (buttonId === 'svc_another_no') {
+    await handleBookAnotherSelection(from, false);
   }
 }
 
