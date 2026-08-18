@@ -8,7 +8,8 @@ const {
   getCustomerBalance,
   submitApprovalDecision
 } = require('./sap');
-const { sendText, sendPdf, sendButtonMenu } = require('./whatsapp');
+const { sendText, sendPdf, sendButtonMenu, sendListMessage } = require('./whatsapp');
+const { getPendingApprovals, getDraftDetail, getApprovalWithDraft, decideApproval } = require('./serviceLayer');
 
 // Create an Express app
 const app = express();
@@ -47,6 +48,7 @@ function formatItemList(items) {
 
 const SALES_ORDER_PRINT_KEYWORD = /^(print sales order|so print)$/i;
 const CUSTOMER_BALANCE_KEYWORD = /^(customer balance|balance)$/i;
+const SO_APPROVALS_KEYWORD = /^(so approvals|approvals|pending approvals)$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -56,7 +58,8 @@ const MENU_BUTTONS = [
 ];
 
 const SECONDARY_MENU_BUTTONS = [
-  { id: 'menu_customer_balance', title: '💰 Customer Balance' }
+  { id: 'menu_customer_balance', title: '💰 Customer Balance' },
+  { id: 'menu_so_approvals', title: '📋 SO Approvals' }
 ];
 
 // In-memory per-sender conversation state. Fine for a single-instance deployment;
@@ -172,6 +175,78 @@ async function handleCustomerCodeStep(from, cardCodeRaw) {
   }
 }
 
+function truncate(str, max) {
+  const s = String(str ?? '');
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+async function startSoApprovals(from) {
+  try {
+    const pending = await getPendingApprovals();
+    if (!pending.length) {
+      await sendText(from, 'No pending approvals right now.');
+      return;
+    }
+
+    const top = pending.slice(0, 10);
+    const rows = await Promise.all(
+      top.map(async (approval) => {
+        try {
+          const draft = await getDraftDetail(approval.DraftEntry);
+          return {
+            id: `sl_approval_${approval.Code}`,
+            title: truncate(draft.CardName || `Draft ${approval.DraftEntry}`, 24),
+            description: truncate(`Total: ${draft.DocTotal}`, 72)
+          };
+        } catch (err) {
+          return {
+            id: `sl_approval_${approval.Code}`,
+            title: truncate(`Draft ${approval.DraftEntry}`, 24),
+            description: 'Details unavailable'
+          };
+        }
+      })
+    );
+
+    const suffix = pending.length > 10 ? ` (showing 10 of ${pending.length})` : '';
+    await sendListMessage(from, `Pending Approvals${suffix}`, 'View Approvals', rows);
+  } catch (err) {
+    console.error('Failed to fetch pending approvals:', err.message);
+    await sendText(from, 'Sorry, could not fetch pending approvals right now. Please try again later.');
+  }
+}
+
+async function showApprovalDetail(from, code) {
+  try {
+    const { draft } = await getApprovalWithDraft(code);
+    await sendButtonMenu(
+      from,
+      `Approval Request #${code}\n\n` +
+        `Customer: ${draft.CardName || 'N/A'}\n` +
+        `Document Date: ${draft.DocDate}\n` +
+        `Total Amount: ${draft.DocTotal}`,
+      [
+        { id: `sl_decide_approve_${code}`, title: '✅ Approve' },
+        { id: `sl_decide_reject_${code}`, title: '❌ Reject' }
+      ]
+    );
+  } catch (err) {
+    console.error('Failed to fetch approval detail:', err.message);
+    await sendText(from, `Sorry, could not load details for approval #${code}. Please try again later.`);
+  }
+}
+
+async function handleSoApprovalDecision(from, code, decision) {
+  try {
+    await decideApproval(code, decision, `Decided via WhatsApp by ${from}`);
+    await sendText(from, `Approval #${code} has been ${decision}.`);
+  } catch (err) {
+    console.error('Failed to submit SL approval decision:', err.message);
+    const detail = err.response?.data?.error?.message?.value || err.response?.data?.message || err.message;
+    await sendText(from, `Sorry, could not record your decision for approval #${code}. ${detail}`);
+  }
+}
+
 async function saveNewItem(from, itemCode, itemName) {
   try {
     await createItem(itemCode, itemName);
@@ -225,6 +300,11 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (SO_APPROVALS_KEYWORD.test(trimmed)) {
+    await startSoApprovals(from);
+    return;
+  }
+
   if (ITEMS_KEYWORD.test(trimmed)) {
     await handleItemsRequest(from);
   }
@@ -239,6 +319,8 @@ async function handleButtonReply(from, buttonId) {
     await startCreateItem(from);
   } else if (buttonId === 'menu_customer_balance') {
     await startCustomerBalance(from);
+  } else if (buttonId === 'menu_so_approvals') {
+    await startSoApprovals(from);
   } else if (buttonId === 'create_item_save') {
     const state = userState.get(from);
     userState.delete(from);
@@ -252,6 +334,16 @@ async function handleButtonReply(from, buttonId) {
     await handleApprovalDecision(from, buttonId.slice('approve_'.length), 'approved');
   } else if (buttonId.startsWith('reject_')) {
     await handleApprovalDecision(from, buttonId.slice('reject_'.length), 'rejected');
+  } else if (buttonId.startsWith('sl_decide_approve_')) {
+    await handleSoApprovalDecision(from, buttonId.slice('sl_decide_approve_'.length), 'approved');
+  } else if (buttonId.startsWith('sl_decide_reject_')) {
+    await handleSoApprovalDecision(from, buttonId.slice('sl_decide_reject_'.length), 'rejected');
+  }
+}
+
+async function handleListReply(from, listItemId) {
+  if (listItemId.startsWith('sl_approval_')) {
+    await showApprovalDetail(from, listItemId.slice('sl_approval_'.length));
   }
 }
 
@@ -321,6 +413,10 @@ app.post('/', (req, res) => {
       } else if (message.type === 'interactive' && message.interactive?.type === 'button_reply') {
         handleButtonReply(message.from, message.interactive.button_reply.id).catch((err) =>
           console.error('Error handling button reply:', err.message)
+        );
+      } else if (message.type === 'interactive' && message.interactive?.type === 'list_reply') {
+        handleListReply(message.from, message.interactive.list_reply.id).catch((err) =>
+          console.error('Error handling list reply:', err.message)
         );
       }
     }

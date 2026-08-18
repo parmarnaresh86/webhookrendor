@@ -36,6 +36,31 @@ async function sendButtonMenu(to, bodyText, buttons) {
   );
 }
 
+async function sendListMessage(to, bodyText, buttonLabel, rows) {
+  await axios.post(
+    `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: bodyText },
+        action: {
+          button: buttonLabel,
+          sections: [
+            {
+              title: 'Pending Approvals',
+              rows: rows.map(({ id, title, description }) => ({ id, title, description }))
+            }
+          ]
+        }
+      }
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+  );
+}
+
 async function uploadMedia(buffer, filename, mimeType) {
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
@@ -67,4 +92,4 @@ async function sendPdf(to, buffer, filename) {
   await sendDocument(to, mediaId, filename);
 }
 
-module.exports = { sendText, sendPdf, sendButtonMenu };
+module.exports = { sendText, sendPdf, sendButtonMenu, sendListMessage };
