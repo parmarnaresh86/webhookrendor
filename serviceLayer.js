@@ -113,4 +113,38 @@ async function decideApproval(code, decision, remarks) {
   });
 }
 
-module.exports = { getPendingApprovals, getDraftDetail, getApprovalWithDraft, decideApproval };
+async function findCustomerByEmail(email) {
+  const escaped = email.replace(/'/g, "''");
+  const data = await callServiceLayer('/BusinessPartners', {
+    baseUrl: SL_BASE_V2,
+    params: {
+      '$filter': `CardType eq 'cCustomer' and EmailAddress eq '${escaped}'`,
+      '$select': 'CardCode,CardName,EmailAddress'
+    }
+  });
+  return data.value && data.value[0] ? data.value[0] : null;
+}
+
+// Confirmed working via live test: POST /ServiceCalls with just
+// CustomerCode/Subject/Description creates a real Service Call
+// (verified: ServiceCallID 245, DocNum 88, for CardCode 1000).
+async function createServiceCall(cardCode, subject, description) {
+  return callServiceLayer('/ServiceCalls', {
+    baseUrl: SL_BASE_V2,
+    method: 'POST',
+    data: {
+      CustomerCode: cardCode,
+      Subject: subject,
+      Description: description
+    }
+  });
+}
+
+module.exports = {
+  getPendingApprovals,
+  getDraftDetail,
+  getApprovalWithDraft,
+  decideApproval,
+  findCustomerByEmail,
+  createServiceCall
+};

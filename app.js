@@ -9,7 +9,14 @@ const {
   submitApprovalDecision
 } = require('./sap');
 const { sendText, sendPdf, sendButtonMenu, sendListMessage } = require('./whatsapp');
-const { getPendingApprovals, getDraftDetail, getApprovalWithDraft, decideApproval } = require('./serviceLayer');
+const {
+  getPendingApprovals,
+  getDraftDetail,
+  getApprovalWithDraft,
+  decideApproval,
+  findCustomerByEmail,
+  createServiceCall
+} = require('./serviceLayer');
 
 // Create an Express app
 const app = express();
@@ -50,6 +57,7 @@ const SALES_ORDER_PRINT_KEYWORD = /^(print sales order|so print)$/i;
 const CUSTOMER_BALANCE_KEYWORD = /^(customer balance|balance)$/i;
 const SO_APPROVALS_KEYWORD = /^(so approvals|approvals|pending approvals)$/i;
 const APPROVAL_MENU_KEYWORD = /^approval$/i;
+const SERVICE_CALL_KEYWORD = /^service call$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -173,6 +181,83 @@ async function handleCustomerCodeStep(from, cardCodeRaw) {
         ? `No customer found with code ${cardCode}.`
         : 'Sorry, could not fetch the customer balance right now. Please try again later.'
     );
+  }
+}
+
+const SERVICE_CALL_SUBJECTS = {
+  svc_raise_issue: 'Raise Issue',
+  svc_book_service: 'Book Call for Service',
+  svc_book_visit: 'Book Call for Visit'
+};
+
+async function startServiceCall(from) {
+  userState.set(from, { step: 'awaiting_service_email' });
+  await sendText(from, 'Please enter your Email ID.');
+}
+
+async function handleServiceEmailStep(from, emailRaw) {
+  const email = emailRaw.trim();
+  if (!email) {
+    await sendText(from, 'Email ID cannot be empty. Please enter your Email ID.');
+    return;
+  }
+
+  try {
+    const customer = await findCustomerByEmail(email);
+    if (!customer) {
+      userState.delete(from);
+      await sendText(from, `No customer found with email ${email}.`);
+      return;
+    }
+
+    userState.set(from, {
+      step: 'awaiting_service_option',
+      cardCode: customer.CardCode,
+      cardName: customer.CardName
+    });
+
+    await sendButtonMenu(from, `Hello ${customer.CardName}! What can I help you with?`, [
+      { id: 'svc_raise_issue', title: '🛠️ Raise Issue' },
+      { id: 'svc_book_service', title: '🔧 Service Call' },
+      { id: 'svc_book_visit', title: '📍 Book Visit' }
+    ]);
+  } catch (err) {
+    console.error('Failed to look up customer by email:', err.message);
+    userState.delete(from);
+    await sendText(from, 'Sorry, could not look up that customer right now. Please try again later.');
+  }
+}
+
+async function handleServiceOptionSelection(from, buttonId) {
+  const state = userState.get(from);
+  if (state?.step !== 'awaiting_service_option') return;
+
+  const subject = SERVICE_CALL_SUBJECTS[buttonId];
+  userState.set(from, { ...state, step: 'awaiting_service_reason', subject });
+  await sendText(from, 'Please enter the reason.');
+}
+
+async function handleServiceReasonStep(from, reasonRaw, state) {
+  const reason = reasonRaw.trim();
+  if (!reason) {
+    await sendText(from, 'Reason cannot be empty. Please enter the reason.');
+    return;
+  }
+
+  try {
+    const serviceCall = await createServiceCall(state.cardCode, state.subject, reason);
+    await sendText(
+      from,
+      `Service Call created successfully.\n\nDoc No: ${serviceCall.DocNum}\nCustomer: ${state.cardName}\nSubject: ${state.subject}\nReason: ${reason}`
+    );
+  } catch (err) {
+    console.error('Failed to create service call:', err.message);
+    const errData = err.response?.data?.error;
+    const detail =
+      (typeof errData?.message === 'string' ? errData.message : errData?.message?.value) ||
+      err.response?.data?.message ||
+      err.message;
+    await sendText(from, `Sorry, could not create the Service Call. ${detail}`);
   }
 }
 
@@ -322,6 +407,17 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (state?.step === 'awaiting_service_email') {
+    await handleServiceEmailStep(from, trimmed);
+    return;
+  }
+
+  if (state?.step === 'awaiting_service_reason') {
+    userState.delete(from);
+    await handleServiceReasonStep(from, trimmed, state);
+    return;
+  }
+
   if (GREETING_KEYWORD.test(trimmed)) {
     userState.delete(from);
     await sendMainMenu(from);
@@ -345,6 +441,11 @@ async function handleIncomingText(from, text) {
 
   if (SO_APPROVALS_KEYWORD.test(trimmed)) {
     await startSoApprovals(from);
+    return;
+  }
+
+  if (SERVICE_CALL_KEYWORD.test(trimmed)) {
+    await startServiceCall(from);
     return;
   }
 
@@ -387,6 +488,8 @@ async function handleButtonReply(from, buttonId) {
     await handleSoApprovalDecision(from, buttonId.slice('sl_decide_approve_'.length), 'approved');
   } else if (buttonId.startsWith('sl_decide_reject_')) {
     await handleSoApprovalDecision(from, buttonId.slice('sl_decide_reject_'.length), 'rejected');
+  } else if (Object.prototype.hasOwnProperty.call(SERVICE_CALL_SUBJECTS, buttonId)) {
+    await handleServiceOptionSelection(from, buttonId);
   }
 }
 
