@@ -1,11 +1,30 @@
 # SAP B1 Service Layer — Approval Decision Call: Research Notes
 
-## Status: UNRESOLVED — waiting on SAP support/docs for the exact call shape
+## Status: RESOLVED
 
-`serviceLayer.js`'s `decideApproval()` currently calls a shape that is
-confirmed **structurally accepted** by the server but does **not** actually
-change an approval request's status. Do not treat it as working until
-verified against SAP's official documentation or support.
+Confirmed live against `ApprovalRequests(10)` on `WMS_DEV_UK`:
+
+```
+PATCH https://<server>:50000/b1s/v2/ApprovalRequests(<Code>)
+Content-Type: application/json
+Cookie: B1SESSION=...
+
+{
+  "ApprovalRequestDecisions": [
+    { "Status": "ardApproved" | "ardNotApproved", "Remarks": "..." }
+  ]
+}
+```
+
+No `ApproverUserName`/`ApproverPassword` or `StageCode`/`UserID` needed —
+the session's own identity resolves that. Must use the **v2** endpoint
+(v1 rejects it as "Command Not Found" via the FunctionImport-based paths
+tried below). This flipped Code 10 from `arsPending` to `arsNotApproved`
+and updated the matching `ApprovalRequestLines` entry with the remarks and
+timestamp. `serviceLayer.js`'s `decideApproval()` now uses this shape.
+
+The rest of this document is kept as a record of what was tried and ruled
+out first, in case a similar investigation is needed for a related call.
 
 ## What's confirmed (via live testing against `https://silverdemo.silvertouch.com:50000/b1s/v1`, DB `WMS_DEV_UK`)
 

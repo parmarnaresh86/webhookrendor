@@ -34,13 +34,14 @@ async function getSessionCookie() {
 }
 
 async function callServiceLayer(path, options = {}) {
+  const { baseUrl = SL_BASE, ...axiosOptions } = options;
   const cookie = await getSessionCookie();
   try {
     const res = await axios({
-      url: `${SL_BASE}${path}`,
+      url: `${baseUrl}${path}`,
       httpsAgent,
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      ...options
+      ...axiosOptions
     });
     return res.data;
   } catch (err) {
@@ -48,16 +49,21 @@ async function callServiceLayer(path, options = {}) {
       sessionCookie = null;
       const freshCookie = await getSessionCookie();
       const res = await axios({
-        url: `${SL_BASE}${path}`,
+        url: `${baseUrl}${path}`,
         httpsAgent,
         headers: { Cookie: freshCookie, 'Content-Type': 'application/json' },
-        ...options
+        ...axiosOptions
       });
       return res.data;
     }
     throw err;
   }
 }
+
+// SL_BASE is configured as the v1 endpoint; the confirmed-working approval
+// decision call requires v2. Session cookies are shared across versions on
+// the same server, so the same login/session logic still applies.
+const SL_BASE_V2 = SL_BASE.replace(/\/v1$/, '/v2');
 
 async function getPendingApprovals() {
   const data = await callServiceLayer('/ApprovalRequests', {
@@ -76,20 +82,24 @@ async function getApprovalWithDraft(code) {
   return { approval, draft };
 }
 
-// UNRESOLVED - see APPROVAL_DECISION_RESEARCH.md for the full investigation.
-// POST /ApprovalRequests(code)/Approve|Reject does not exist ("Command Not Found").
-// This shape (root-level DraftsService_HandleApprovalRequest with a bare
-// {Code, Status, Remarks} body) is the only one that doesn't get rejected as
-// invalid, but it also does not actually change the record's status when
-// tested live - do not treat this as working. Replace once the correct call
-// is confirmed via SAP support/documentation.
+// Confirmed working via live test against ApprovalRequests(10) on
+// WMS_DEV_UK: PATCH on the entity itself (v2 endpoint) with just the
+// ApprovalRequestDecisions array - no ApproverUserName/Password or
+// StageCode/UserID needed, the session's identity handles that. This
+// flipped Code 10 from arsPending to arsNotApproved and updated the
+// matching ApprovalRequestLines entry. See APPROVAL_DECISION_RESEARCH.md
+// for the full trail of what was tried before landing on this.
 async function decideApproval(code, decision, remarks) {
-  return callServiceLayer('/DraftsService_HandleApprovalRequest', {
-    method: 'POST',
+  return callServiceLayer(`/ApprovalRequests(${code})`, {
+    baseUrl: SL_BASE_V2,
+    method: 'PATCH',
     data: {
-      Code: Number(code),
-      Status: decision === 'approved' ? 'arsApproved' : 'arsNotApproved',
-      Remarks: remarks || ''
+      ApprovalRequestDecisions: [
+        {
+          Status: decision === 'approved' ? 'ardApproved' : 'ardNotApproved',
+          Remarks: remarks || ''
+        }
+      ]
     }
   });
 }

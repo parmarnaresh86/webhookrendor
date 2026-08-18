@@ -242,7 +242,11 @@ async function handleSoApprovalDecision(from, code, decision) {
     await sendText(from, `Approval #${code} has been ${decision}.`);
   } catch (err) {
     console.error('Failed to submit SL approval decision:', err.message);
-    const detail = err.response?.data?.error?.message?.value || err.response?.data?.message || err.message;
+    const errData = err.response?.data?.error;
+    const detail =
+      (typeof errData?.message === 'string' ? errData.message : errData?.message?.value) ||
+      err.response?.data?.message ||
+      err.message;
     await sendText(from, `Sorry, could not record your decision for approval #${code}. ${detail}`);
   }
 }
