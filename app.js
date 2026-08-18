@@ -49,6 +49,7 @@ function formatItemList(items) {
 const SALES_ORDER_PRINT_KEYWORD = /^(print sales order|so print)$/i;
 const CUSTOMER_BALANCE_KEYWORD = /^(customer balance|balance)$/i;
 const SO_APPROVALS_KEYWORD = /^(so approvals|approvals|pending approvals)$/i;
+const APPROVAL_MENU_KEYWORD = /^approval$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -180,11 +181,20 @@ function truncate(str, max) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-async function startSoApprovals(from) {
+// SAP B1 object type codes: 17 = Sales Order, 22 = Purchase Order,
+// 13 = A/R Invoice.
+const APPROVAL_DOC_TYPES = {
+  so: { objectType: '17', label: 'Sales Order' },
+  po: { objectType: '22', label: 'Purchase Order' },
+  invoice: { objectType: '13', label: 'Invoice' }
+};
+
+async function startApprovalsList(from, docTypeKey) {
+  const docType = APPROVAL_DOC_TYPES[docTypeKey];
   try {
-    const pending = await getPendingApprovals();
+    const pending = await getPendingApprovals(docType.objectType);
     if (!pending.length) {
-      await sendText(from, 'No pending approvals right now.');
+      await sendText(from, `No pending ${docType.label} approvals right now.`);
       return;
     }
 
@@ -209,11 +219,23 @@ async function startSoApprovals(from) {
     );
 
     const suffix = pending.length > 10 ? ` (showing 10 of ${pending.length})` : '';
-    await sendListMessage(from, `Pending Approvals${suffix}`, 'View Approvals', rows);
+    await sendListMessage(from, `Pending ${docType.label} Approvals${suffix}`, 'View Approvals', rows);
   } catch (err) {
-    console.error('Failed to fetch pending approvals:', err.message);
+    console.error(`Failed to fetch pending ${docType.label} approvals:`, err.message);
     await sendText(from, 'Sorry, could not fetch pending approvals right now. Please try again later.');
   }
+}
+
+async function startSoApprovals(from) {
+  await startApprovalsList(from, 'so');
+}
+
+async function sendApprovalTypeMenu(from) {
+  await sendButtonMenu(from, 'Welcome to SAP B1 Approval System', [
+    { id: 'apptype_so', title: '📄 SO Approval' },
+    { id: 'apptype_po', title: '📦 PO Approval' },
+    { id: 'apptype_invoice', title: '🧾 Invoice Approval' }
+  ]);
 }
 
 async function showApprovalDetail(from, code) {
@@ -304,6 +326,11 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (APPROVAL_MENU_KEYWORD.test(trimmed)) {
+    await sendApprovalTypeMenu(from);
+    return;
+  }
+
   if (SO_APPROVALS_KEYWORD.test(trimmed)) {
     await startSoApprovals(from);
     return;
@@ -325,6 +352,12 @@ async function handleButtonReply(from, buttonId) {
     await startCustomerBalance(from);
   } else if (buttonId === 'menu_so_approvals') {
     await startSoApprovals(from);
+  } else if (buttonId === 'apptype_so') {
+    await startApprovalsList(from, 'so');
+  } else if (buttonId === 'apptype_po') {
+    await startApprovalsList(from, 'po');
+  } else if (buttonId === 'apptype_invoice') {
+    await startApprovalsList(from, 'invoice');
   } else if (buttonId === 'create_item_save') {
     const state = userState.get(from);
     userState.delete(from);
