@@ -19,7 +19,8 @@ const {
   createServiceCall,
   getServiceCallsForDate,
   getDocumentsForDate,
-  createActivity
+  createActivity,
+  getItemStockByWarehouse
 } = require('./serviceLayer');
 
 // Create an Express app
@@ -67,6 +68,7 @@ const TODAY_SALES_ORDER_KEYWORD = /^today('?s)? sales orders?$/i;
 const TODAY_PURCHASE_ORDER_KEYWORD = /^today('?s)? purchase orders?$/i;
 const TODAY_INVOICE_KEYWORD = /^today('?s)? invoices?$/i;
 const ACTIVITY_KEYWORD = /^(activity|create activity)$/i;
+const STOCK_KEYWORD = /^stock$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -382,6 +384,41 @@ async function handleActivityNotesStep(from, notesRaw, state) {
   }
 }
 
+async function startStockLookup(from) {
+  userState.set(from, { step: 'awaiting_stock_item_code' });
+  await sendText(from, 'Please enter the Item Code.');
+}
+
+async function handleStockItemCodeStep(from, itemCodeRaw) {
+  const itemCode = itemCodeRaw.trim();
+  if (!itemCode) {
+    await sendText(from, 'Item Code cannot be empty. Please enter the Item Code.');
+    return;
+  }
+
+  try {
+    const item = await getItemStockByWarehouse(itemCode);
+    const warehouses = item.ItemWarehouseInfoCollection || [];
+    const withStock = warehouses.filter((w) => w.InStock);
+    const lines = (withStock.length ? withStock : warehouses)
+      .map((w) => `- ${w.WarehouseCode}: ${w.InStock} (Committed: ${w.Committed}, Ordered: ${w.Ordered})`)
+      .join('\n');
+    await sendText(
+      from,
+      `Item: ${item.ItemName || itemCode}\nCode: ${item.ItemCode || itemCode}\n\nStock by Warehouse:\n${lines}`
+    );
+  } catch (err) {
+    console.error('Failed to fetch item stock:', err.message);
+    const notFound = err.response?.status === 404;
+    await sendText(
+      from,
+      notFound
+        ? `No item found with code ${itemCode}.`
+        : 'Sorry, could not fetch item stock right now. Please try again later.'
+    );
+  }
+}
+
 // SAP B1's standard Service Call status codes (not a named OData enum in
 // the metadata, just Edm.Int32) - confirmed -3 = Open from live data.
 // Other codes shown as-is if encountered.
@@ -635,6 +672,12 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (state?.step === 'awaiting_stock_item_code') {
+    userState.delete(from);
+    await handleStockItemCodeStep(from, trimmed);
+    return;
+  }
+
   if (GREETING_KEYWORD.test(trimmed)) {
     userState.delete(from);
     await sendMainMenu(from);
@@ -691,6 +734,11 @@ async function handleIncomingText(from, text) {
 
   if (ACTIVITY_KEYWORD.test(trimmed)) {
     await startActivityCreation(from);
+    return;
+  }
+
+  if (STOCK_KEYWORD.test(trimmed)) {
+    await startStockLookup(from);
     return;
   }
 

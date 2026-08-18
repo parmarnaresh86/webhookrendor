@@ -188,6 +188,19 @@ async function createActivity(cardCode, activityType, notes) {
   });
 }
 
+// Confirmed working live against Items('00000-CA-001-0001'): returns
+// ItemName + ItemWarehouseInfoCollection (WarehouseCode, InStock,
+// Committed, Ordered per warehouse).
+async function getItemStockByWarehouse(itemCode) {
+  const escaped = itemCode.replace(/'/g, "''");
+  return callServiceLayer(`/Items('${escaped}')`, {
+    baseUrl: SL_BASE_V2,
+    params: {
+      '$select': 'ItemCode,ItemName,ItemWarehouseInfoCollection'
+    }
+  });
+}
+
 module.exports = {
   getPendingApprovals,
   getDraftDetail,
@@ -197,5 +210,6 @@ module.exports = {
   createServiceCall,
   getServiceCallsForDate,
   getDocumentsForDate,
-  createActivity
+  createActivity,
+  getItemStockByWarehouse
 };
