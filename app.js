@@ -17,7 +17,8 @@ const {
   decideApproval,
   findCustomerByEmail,
   createServiceCall,
-  getServiceCallsForDate
+  getServiceCallsForDate,
+  getDocumentsForDate
 } = require('./serviceLayer');
 
 // Create an Express app
@@ -61,6 +62,9 @@ const SO_APPROVALS_KEYWORD = /^(so approvals|approvals|pending approvals)$/i;
 const APPROVAL_MENU_KEYWORD = /^approval$/i;
 const SERVICE_CALL_KEYWORD = /^service call$/i;
 const TODAY_SERVICE_CALLS_KEYWORD = /^today service calls?$/i;
+const TODAY_SALES_ORDER_KEYWORD = /^today('?s)? sales orders?$/i;
+const TODAY_PURCHASE_ORDER_KEYWORD = /^today('?s)? purchase orders?$/i;
+const TODAY_INVOICE_KEYWORD = /^today('?s)? invoices?$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -335,6 +339,45 @@ cron.schedule('0 9 * * *', () => {
   );
 });
 
+const DOCUMENT_STATUS_LABELS = {
+  bost_Open: 'Open',
+  bost_Close: 'Closed'
+};
+
+function formatDocumentStatus(status) {
+  return DOCUMENT_STATUS_LABELS[status] || status;
+}
+
+const TODAY_DOCUMENT_TYPES = {
+  so: { entitySet: 'Orders', label: 'Sales Order' },
+  po: { entitySet: 'PurchaseOrders', label: 'Purchase Order' },
+  invoice: { entitySet: 'Invoices', label: 'Invoice' }
+};
+
+function formatDocumentsSummary(docs, label, dateLabel) {
+  if (!docs.length) {
+    return `No ${label}s found for ${dateLabel}.`;
+  }
+  const lines = docs.map(
+    (doc) =>
+      `Doc No: ${doc.DocNum}\nCustomer: ${doc.CardName}\nTotal: ${doc.DocTotal}\n` +
+      `Status: ${formatDocumentStatus(doc.DocumentStatus)}`
+  );
+  return `${label}s for ${dateLabel} (${docs.length}):\n\n${lines.join('\n\n')}`;
+}
+
+async function sendTodaysDocumentsSummary(from, docTypeKey) {
+  const docType = TODAY_DOCUMENT_TYPES[docTypeKey];
+  try {
+    const docs = await getDocumentsForDate(docType.entitySet, new Date());
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    await sendText(from, formatDocumentsSummary(docs, docType.label, dateLabel));
+  } catch (err) {
+    console.error(`Failed to fetch today's ${docType.label}s:`, err.message);
+    await sendText(from, `Sorry, could not fetch today's ${docType.label}s right now.`);
+  }
+}
+
 function truncate(str, max) {
   const s = String(str ?? '');
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
@@ -528,6 +571,21 @@ async function handleIncomingText(from, text) {
     if (from !== TEST_NOTIFY_PHONE) {
       await sendText(from, `Sent today's Service Call summary to +${TEST_NOTIFY_PHONE}.`);
     }
+    return;
+  }
+
+  if (TODAY_SALES_ORDER_KEYWORD.test(trimmed)) {
+    await sendTodaysDocumentsSummary(from, 'so');
+    return;
+  }
+
+  if (TODAY_PURCHASE_ORDER_KEYWORD.test(trimmed)) {
+    await sendTodaysDocumentsSummary(from, 'po');
+    return;
+  }
+
+  if (TODAY_INVOICE_KEYWORD.test(trimmed)) {
+    await sendTodaysDocumentsSummary(from, 'invoice');
     return;
   }
 

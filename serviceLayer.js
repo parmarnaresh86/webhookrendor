@@ -159,6 +159,20 @@ async function getServiceCallsForDate(date) {
   return data.value || [];
 }
 
+// Confirmed working live against Orders, PurchaseOrders, and Invoices - same
+// field names and CreationDate filter pattern as getServiceCallsForDate.
+async function getDocumentsForDate(entitySet, date) {
+  const isoDate = date.toISOString().slice(0, 10);
+  const data = await callServiceLayer(`/${entitySet}`, {
+    baseUrl: SL_BASE_V2,
+    params: {
+      '$filter': `CreationDate eq ${isoDate}T00:00:00Z`,
+      '$select': 'DocEntry,DocNum,CardName,DocTotal,DocumentStatus'
+    }
+  });
+  return data.value || [];
+}
+
 module.exports = {
   getPendingApprovals,
   getDraftDetail,
@@ -166,5 +180,6 @@ module.exports = {
   decideApproval,
   findCustomerByEmail,
   createServiceCall,
-  getServiceCallsForDate
+  getServiceCallsForDate,
+  getDocumentsForDate
 };
