@@ -238,6 +238,17 @@ async function sendApprovalTypeMenu(from) {
   ]);
 }
 
+function formatDraftLines(draft) {
+  const lines = draft.DocumentLines || [];
+  const top = lines.slice(0, 15);
+  const formatted = top.map(
+    (line) =>
+      `- ${line.ItemDescription || line.ItemCode} | Qty: ${line.Quantity} | Price: ${line.Price} | Total: ${line.LineTotal}`
+  );
+  const suffix = lines.length > 15 ? `\n...and ${lines.length - 15} more line(s).` : '';
+  return `${formatted.join('\n')}${suffix}`;
+}
+
 async function showApprovalDetail(from, code) {
   try {
     const { draft } = await getApprovalWithDraft(code);
@@ -245,7 +256,8 @@ async function showApprovalDetail(from, code) {
       from,
       `Approval Request #${code}\n\n` +
         `Customer: ${draft.CardName || 'N/A'}\n` +
-        `Document Date: ${draft.DocDate}\n` +
+        `Document Date: ${draft.DocDate}\n\n` +
+        `${formatDraftLines(draft)}\n\n` +
         `Total Amount: ${draft.DocTotal}`,
       [
         { id: `sl_decide_approve_${code}`, title: '✅ Approve' },
