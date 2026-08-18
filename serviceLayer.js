@@ -76,23 +76,19 @@ async function getApprovalWithDraft(code) {
   return { approval, draft };
 }
 
-// Confirmed via metadata inspection: ApprovalRequests exposes ApprovalRequestDecisions
-// with ApproverUserName/ApproverPassword/Status/Remarks fields, which strongly implies
-// the decision actions require the approver's SAP credentials. The exact action path
-// and body shape below (POST .../Approve or .../Reject) is based on documented SAP
-// Service Layer behavior but was NOT live-tested against this server (by request,
-// to avoid mutating real pending approval records) - verify against one real request
-// before relying on this in production.
-const SL_APPROVER_USERNAME = process.env.SL_APPROVER_USERNAME || SL_USERNAME;
-const SL_APPROVER_PASSWORD = process.env.SL_APPROVER_PASSWORD || SL_PASSWORD;
-
+// UNRESOLVED - see APPROVAL_DECISION_RESEARCH.md for the full investigation.
+// POST /ApprovalRequests(code)/Approve|Reject does not exist ("Command Not Found").
+// This shape (root-level DraftsService_HandleApprovalRequest with a bare
+// {Code, Status, Remarks} body) is the only one that doesn't get rejected as
+// invalid, but it also does not actually change the record's status when
+// tested live - do not treat this as working. Replace once the correct call
+// is confirmed via SAP support/documentation.
 async function decideApproval(code, decision, remarks) {
-  const action = decision === 'approved' ? 'Approve' : 'Reject';
-  return callServiceLayer(`/ApprovalRequests(${code})/${action}`, {
+  return callServiceLayer('/DraftsService_HandleApprovalRequest', {
     method: 'POST',
     data: {
-      ApproverUserName: SL_APPROVER_USERNAME,
-      ApproverPassword: SL_APPROVER_PASSWORD,
+      Code: Number(code),
+      Status: decision === 'approved' ? 'arsApproved' : 'arsNotApproved',
       Remarks: remarks || ''
     }
   });
