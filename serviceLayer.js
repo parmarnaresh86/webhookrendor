@@ -65,9 +65,18 @@ async function callServiceLayer(path, options = {}) {
 // the same server, so the same login/session logic still applies.
 const SL_BASE_V2 = SL_BASE.replace(/\/v1$/, '/v2');
 
-async function getPendingApprovals() {
+// SAP B1 object type codes: 17 = Sales Order (Orders), 22 = Purchase Order,
+// 1470000113 = Purchase Request. Filtering by ObjectType keeps unrelated
+// document types (which can vastly outnumber Sales Orders in a live system)
+// from crowding out the ones we actually want to show.
+const SALES_ORDER_OBJECT_TYPE = '17';
+
+async function getPendingApprovals(objectType = SALES_ORDER_OBJECT_TYPE) {
   const data = await callServiceLayer('/ApprovalRequests', {
-    params: { '$filter': "Status eq 'arsPending'" }
+    params: {
+      '$filter': `Status eq 'arsPending' and ObjectType eq '${objectType}'`,
+      '$orderby': 'Code desc'
+    }
   });
   return data.value || [];
 }
