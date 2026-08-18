@@ -18,7 +18,8 @@ const {
   findCustomerByEmail,
   createServiceCall,
   getServiceCallsForDate,
-  getDocumentsForDate
+  getDocumentsForDate,
+  createActivity
 } = require('./serviceLayer');
 
 // Create an Express app
@@ -65,6 +66,7 @@ const TODAY_SERVICE_CALLS_KEYWORD = /^today service calls?$/i;
 const TODAY_SALES_ORDER_KEYWORD = /^today('?s)? sales orders?$/i;
 const TODAY_PURCHASE_ORDER_KEYWORD = /^today('?s)? purchase orders?$/i;
 const TODAY_INVOICE_KEYWORD = /^today('?s)? invoices?$/i;
+const ACTIVITY_KEYWORD = /^(activity|create activity)$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -290,6 +292,93 @@ async function handleBookAnotherSelection(from, wantsAnother) {
       from,
       'Thank you for visiting STTL. Our representative will contact you shortly. Have a great day!'
     );
+  }
+}
+
+const ACTIVITY_TYPES = {
+  act_call: 'cn_Conversation',
+  act_meeting: 'cn_Meeting',
+  act_task: 'cn_Task'
+};
+
+const ACTIVITY_TYPE_LABELS = {
+  act_call: 'Call',
+  act_meeting: 'Meeting',
+  act_task: 'Task'
+};
+
+async function startActivityCreation(from) {
+  userState.set(from, { step: 'awaiting_activity_email' });
+  await sendText(from, 'Please enter your Email ID.');
+}
+
+async function handleActivityEmailStep(from, emailRaw) {
+  const email = emailRaw.trim().toLowerCase();
+  if (!email) {
+    await sendText(from, 'Email ID cannot be empty. Please enter your Email ID.');
+    return;
+  }
+
+  try {
+    const customer = await findCustomerByEmail(email);
+    if (!customer) {
+      userState.delete(from);
+      await sendText(from, `No customer found with email ${email}.`);
+      return;
+    }
+
+    userState.set(from, {
+      step: 'awaiting_activity_type',
+      cardCode: customer.CardCode,
+      cardName: customer.CardName
+    });
+
+    await sendButtonMenu(from, `Hello ${customer.CardName}! What type of activity would you like to log?`, [
+      { id: 'act_call', title: '📞 Call' },
+      { id: 'act_meeting', title: '🤝 Meeting' },
+      { id: 'act_task', title: '✅ Task' }
+    ]);
+  } catch (err) {
+    console.error('Failed to look up customer by email:', err.message);
+    userState.delete(from);
+    await sendText(from, 'Sorry, could not look up that customer right now. Please try again later.');
+  }
+}
+
+async function handleActivityTypeSelection(from, buttonId) {
+  const state = userState.get(from);
+  if (state?.step !== 'awaiting_activity_type') return;
+
+  userState.set(from, {
+    ...state,
+    step: 'awaiting_activity_notes',
+    activityType: ACTIVITY_TYPES[buttonId],
+    activityLabel: ACTIVITY_TYPE_LABELS[buttonId]
+  });
+  await sendText(from, 'Please enter the notes.');
+}
+
+async function handleActivityNotesStep(from, notesRaw, state) {
+  const notes = notesRaw.trim();
+  if (!notes) {
+    await sendText(from, 'Notes cannot be empty. Please enter the notes.');
+    return;
+  }
+
+  try {
+    const activity = await createActivity(state.cardCode, state.activityType, notes);
+    await sendText(
+      from,
+      `Activity created successfully.\n\nCode: ${activity.ActivityCode}\nCustomer: ${state.cardName}\nType: ${state.activityLabel}\nNotes: ${notes}`
+    );
+  } catch (err) {
+    console.error('Failed to create activity:', err.message);
+    const errData = err.response?.data?.error;
+    const detail =
+      (typeof errData?.message === 'string' ? errData.message : errData?.message?.value) ||
+      err.response?.data?.message ||
+      err.message;
+    await sendText(from, `Sorry, could not create the Activity. ${detail}`);
   }
 }
 
@@ -535,6 +624,17 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (state?.step === 'awaiting_activity_email') {
+    await handleActivityEmailStep(from, trimmed);
+    return;
+  }
+
+  if (state?.step === 'awaiting_activity_notes') {
+    userState.delete(from);
+    await handleActivityNotesStep(from, trimmed, state);
+    return;
+  }
+
   if (GREETING_KEYWORD.test(trimmed)) {
     userState.delete(from);
     await sendMainMenu(from);
@@ -589,6 +689,11 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (ACTIVITY_KEYWORD.test(trimmed)) {
+    await startActivityCreation(from);
+    return;
+  }
+
   if (ITEMS_KEYWORD.test(trimmed)) {
     await handleItemsRequest(from);
   }
@@ -634,6 +739,8 @@ async function handleButtonReply(from, buttonId) {
     await handleBookAnotherSelection(from, true);
   } else if (buttonId === 'svc_another_no') {
     await handleBookAnotherSelection(from, false);
+  } else if (Object.prototype.hasOwnProperty.call(ACTIVITY_TYPES, buttonId)) {
+    await handleActivityTypeSelection(from, buttonId);
   }
 }
 

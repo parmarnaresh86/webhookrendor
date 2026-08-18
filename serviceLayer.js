@@ -173,6 +173,21 @@ async function getDocumentsForDate(entitySet, date) {
   return data.value || [];
 }
 
+// Confirmed working via live test: POST /Activities with just
+// CardCode/Activity/Notes creates a real Activity
+// (verified: ActivityCode 81 for CardCode 1000).
+async function createActivity(cardCode, activityType, notes) {
+  return callServiceLayer('/Activities', {
+    baseUrl: SL_BASE_V2,
+    method: 'POST',
+    data: {
+      CardCode: cardCode,
+      Activity: activityType,
+      Notes: notes
+    }
+  });
+}
+
 module.exports = {
   getPendingApprovals,
   getDraftDetail,
@@ -181,5 +196,6 @@ module.exports = {
   findCustomerByEmail,
   createServiceCall,
   getServiceCallsForDate,
-  getDocumentsForDate
+  getDocumentsForDate,
+  createActivity
 };
