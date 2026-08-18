@@ -1,5 +1,6 @@
 // Import Express.js
 const express = require('express');
+const cron = require('node-cron');
 const {
   getItems,
   findSalesOrderByDocNum,
@@ -15,7 +16,8 @@ const {
   getApprovalWithDraft,
   decideApproval,
   findCustomerByEmail,
-  createServiceCall
+  createServiceCall,
+  getServiceCallsForDate
 } = require('./serviceLayer');
 
 // Create an Express app
@@ -58,6 +60,7 @@ const CUSTOMER_BALANCE_KEYWORD = /^(customer balance|balance)$/i;
 const SO_APPROVALS_KEYWORD = /^(so approvals|approvals|pending approvals)$/i;
 const APPROVAL_MENU_KEYWORD = /^approval$/i;
 const SERVICE_CALL_KEYWORD = /^service call$/i;
+const TODAY_SERVICE_CALLS_KEYWORD = /^today service calls?$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
 
 const MENU_BUTTONS = [
@@ -286,6 +289,52 @@ async function handleBookAnotherSelection(from, wantsAnother) {
   }
 }
 
+// SAP B1's standard Service Call status codes (not a named OData enum in
+// the metadata, just Edm.Int32) - confirmed -3 = Open from live data.
+// Other codes shown as-is if encountered.
+const SERVICE_CALL_STATUS_LABELS = {
+  '-3': 'Open',
+  '-2': 'On Hold',
+  '-1': 'Closed'
+};
+
+function formatServiceCallStatus(status) {
+  return SERVICE_CALL_STATUS_LABELS[String(status)] || `Status code ${status}`;
+}
+
+function formatServiceCallsSummary(calls, dateLabel) {
+  if (!calls.length) {
+    return `No Service Calls found for ${dateLabel}.`;
+  }
+  const lines = calls.map(
+    (call) =>
+      `Doc No: ${call.DocNum}\nCustomer: ${call.CustomerName}\nSubject: ${call.Subject}\n` +
+      `Status: ${formatServiceCallStatus(call.Status)}\nDetail: ${call.Description || 'N/A'}`
+  );
+  return `Service Calls for ${dateLabel} (${calls.length}):\n\n${lines.join('\n\n')}`;
+}
+
+const TEST_NOTIFY_PHONE = process.env.TEST_NOTIFY_PHONE || '917801829449';
+
+async function sendTodaysServiceCallsSummary(toNumber) {
+  try {
+    const calls = await getServiceCallsForDate(new Date());
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    await sendText(toNumber, formatServiceCallsSummary(calls, dateLabel));
+  } catch (err) {
+    console.error('Failed to send today\'s service calls summary:', err.message);
+    await sendText(toNumber, 'Sorry, could not fetch today\'s Service Calls right now.');
+  }
+}
+
+// Runs once a day; server clock is UTC on Render, so this fires at 09:00 UTC.
+// Adjust the cron expression if a different local time is needed.
+cron.schedule('0 9 * * *', () => {
+  sendTodaysServiceCallsSummary(TEST_NOTIFY_PHONE).catch((err) =>
+    console.error('Scheduled service call summary failed:', err.message)
+  );
+});
+
 function truncate(str, max) {
   const s = String(str ?? '');
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
@@ -471,6 +520,14 @@ async function handleIncomingText(from, text) {
 
   if (SERVICE_CALL_KEYWORD.test(trimmed)) {
     await startServiceCall(from);
+    return;
+  }
+
+  if (TODAY_SERVICE_CALLS_KEYWORD.test(trimmed)) {
+    await sendTodaysServiceCallsSummary(TEST_NOTIFY_PHONE);
+    if (from !== TEST_NOTIFY_PHONE) {
+      await sendText(from, `Sent today's Service Call summary to +${TEST_NOTIFY_PHONE}.`);
+    }
     return;
   }
 

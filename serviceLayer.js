@@ -144,11 +144,27 @@ async function createServiceCall(cardCode, subject, description) {
   });
 }
 
+// Confirmed working live: unquoted ISO date filter, e.g.
+// "CreationDate eq 2026-08-18T00:00:00Z", matches CreationDate exactly
+// (SAP stores it as a date-only value at midnight).
+async function getServiceCallsForDate(date) {
+  const isoDate = date.toISOString().slice(0, 10);
+  const data = await callServiceLayer('/ServiceCalls', {
+    baseUrl: SL_BASE_V2,
+    params: {
+      '$filter': `CreationDate eq ${isoDate}T00:00:00Z`,
+      '$select': 'ServiceCallID,DocNum,Subject,CustomerName,Status,Description'
+    }
+  });
+  return data.value || [];
+}
+
 module.exports = {
   getPendingApprovals,
   getDraftDetail,
   getApprovalWithDraft,
   decideApproval,
   findCustomerByEmail,
-  createServiceCall
+  createServiceCall,
+  getServiceCallsForDate
 };
