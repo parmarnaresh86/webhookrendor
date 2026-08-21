@@ -1,6 +1,7 @@
 // Import Express.js
 const express = require('express');
 const cron = require('node-cron');
+const axios = require('axios');
 const {
   getItems,
   findSalesOrderByDocNum,
@@ -846,6 +847,21 @@ async function handleApprovalDecision(from, draftId, decision) {
   }
 }
 
+// This phone number is shared with the vero billing project, which also
+// wants delivery/read/failed status callbacks - but Meta only allows one
+// registered webhook per app/number. Since this webhook is the one
+// registered with Meta, forward the raw payload to vero's own webhook
+// endpoint (which parses the same Meta payload shape) rather than
+// duplicating the registration.
+const VERO_WEBHOOK_FORWARD_URL = process.env.VERO_WEBHOOK_FORWARD_URL || 'https://vero-backend-4bmj.onrender.com/api/webhook/whatsapp';
+
+function forwardWebhookToVero(body) {
+  if (!VERO_WEBHOOK_FORWARD_URL) return;
+  axios.post(VERO_WEBHOOK_FORWARD_URL, body, { timeout: 5000 }).catch((err) =>
+    console.error('Failed to forward webhook to vero:', err.message)
+  );
+}
+
 // Route for POST requests
 app.post('/', (req, res) => {
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -853,6 +869,8 @@ app.post('/', (req, res) => {
   console.log(JSON.stringify(req.body, null, 2));
 
   res.status(200).end();
+
+  forwardWebhookToVero(req.body);
 
   const messages = req.body?.entry?.[0]?.changes?.[0]?.value?.messages;
   if (messages && messages.length) {
