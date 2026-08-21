@@ -70,7 +70,10 @@ const TODAY_PURCHASE_ORDER_KEYWORD = /^today('?s)? purchase orders?$/i;
 const TODAY_INVOICE_KEYWORD = /^today('?s)? invoices?$/i;
 const ACTIVITY_KEYWORD = /^(activity|create activity)$/i;
 const STOCK_KEYWORD = /^stock$/i;
+const BILL_PRINT_KEYWORD = /^(print bill|bill print|milkat bill|બિલ)$/i;
 const GREETING_KEYWORD = /^(hi|hello|hey|menu)$/i;
+
+const VERO_BACKEND_URL = process.env.VERO_BACKEND_URL || 'https://vero-backend-4bmj.onrender.com';
 
 const MENU_BUTTONS = [
   { id: 'menu_items', title: '📦 Items List' },
@@ -131,6 +134,38 @@ async function handleSalesOrderDocNum(from, docNumRaw) {
 async function startSalesOrderPrint(from) {
   userState.set(from, { step: 'awaiting_so_docnum' });
   await sendText(from, 'Please enter the Sales Order document number.');
+}
+
+async function handleBillPropertyNo(from, propertyNoRaw) {
+  const propertyNo = propertyNoRaw.trim();
+  if (!propertyNo) {
+    await sendText(from, 'Please enter a valid Milkat No (property number).');
+    return;
+  }
+
+  try {
+    const response = await axios.get(`${VERO_BACKEND_URL}/api/bills/${encodeURIComponent(propertyNo)}.pdf`, {
+      responseType: 'arraybuffer',
+      validateStatus: () => true
+    });
+    if (response.status === 404) {
+      await sendText(from, `No bill found for Milkat No ${propertyNo}.`);
+      return;
+    }
+    if (response.status !== 200) {
+      await sendText(from, 'Sorry, could not fetch the bill right now. Please try again later.');
+      return;
+    }
+    await sendPdf(from, Buffer.from(response.data), `bill-${propertyNo}.pdf`);
+  } catch (err) {
+    console.error('Failed to fetch/send bill PDF:', err.message);
+    await sendText(from, 'Sorry, could not fetch the bill right now. Please try again later.');
+  }
+}
+
+async function startBillPrint(from) {
+  userState.set(from, { step: 'awaiting_bill_property_no' });
+  await sendText(from, 'Please enter your Milkat No (property number).');
 }
 
 async function startCreateItem(from) {
@@ -635,6 +670,12 @@ async function handleIncomingText(from, text) {
     return;
   }
 
+  if (state?.step === 'awaiting_bill_property_no') {
+    userState.delete(from);
+    await handleBillPropertyNo(from, trimmed);
+    return;
+  }
+
   if (state?.step === 'awaiting_item_code') {
     await handleItemCodeStep(from, trimmed);
     return;
@@ -687,6 +728,11 @@ async function handleIncomingText(from, text) {
 
   if (SALES_ORDER_PRINT_KEYWORD.test(trimmed)) {
     await startSalesOrderPrint(from);
+    return;
+  }
+
+  if (BILL_PRINT_KEYWORD.test(trimmed)) {
+    await startBillPrint(from);
     return;
   }
 
