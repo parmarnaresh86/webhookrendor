@@ -176,6 +176,32 @@ async function handleVillageSelection(from, villageId) {
   await sendText(from, 'કૃપા કરીને તમારો મોબાઇલ નંબર દાખલ કરો.');
 }
 
+function formatBillSummaryText(taxpayer) {
+  const receiptNo = `${taxpayer.propertyNo}-${new Date().getFullYear()}`;
+  const date = new Date().toLocaleDateString('en-IN');
+  const total = taxpayer.pendingTax || taxpayer.currentTax || taxpayer.demandTotal || 0;
+  const lines = [
+    `પહોંચ નં.: ${receiptNo}`,
+    `તારીખ: ${date}`,
+    `મિલકત નં.: ${taxpayer.propertyNo}`,
+    taxpayer.houseNo ? `મકાન નં.: ${taxpayer.houseNo}` : null,
+    `માલિકનું નામ: ${taxpayer.holderName || '-'}`,
+    taxpayer.occupantName ? `કબજેદારનું નામ: ${taxpayer.occupantName}` : null,
+    `વિસ્તાર: ${taxpayer.area || '-'}`,
+    `મોબાઇલ નં.: ${taxpayer.mobile || '-'}`,
+    `મિલકતનો પ્રકાર: ${taxpayer.category || '-'}`,
+    taxpayer.description ? `વર્ણન: ${taxpayer.description}` : null,
+    '----------------------------------------',
+    'વેરાની વિગત',
+    `માંગણા રકમ: રૂ. ${taxpayer.demandTotal || 0}`,
+    `પાછલી / બાકી રકમ: રૂ. ${taxpayer.pendingTax || 0}`,
+    `ચાલુ રકમ: રૂ. ${taxpayer.currentTax || total}`,
+    `કુલ ચુકવવાની રકમ: રૂ. ${total}`,
+    `ચુકવણી સ્થિતિ: ${taxpayer.paid ? 'ચૂકવેલ' : 'બાકી'}`
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
 async function handleBillMobileStep(from, mobileRaw, state) {
   const mobile = mobileRaw.trim();
   if (!/^\d{10}$/.test(mobile)) {
@@ -200,6 +226,7 @@ async function handleBillMobileStep(from, mobileRaw, state) {
     }
 
     const taxpayer = response.data;
+    await sendText(from, formatBillSummaryText(taxpayer));
     const sent = await fetchAndSendBillByPropertyNo(from, taxpayer.propertyNo);
     if (!sent) {
       await sendText(from, 'Sorry, could not fetch your bill right now. Please try again later.');
