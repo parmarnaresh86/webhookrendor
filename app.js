@@ -202,9 +202,16 @@ function formatBillSummaryText(taxpayer) {
   return lines.filter(Boolean).join('\n');
 }
 
+function normalizeToTenDigitMobile(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+  return digits.length === 10 ? digits : null;
+}
+
 async function handleBillMobileStep(from, mobileRaw, state) {
-  const mobile = mobileRaw.trim();
-  if (!/^\d{10}$/.test(mobile)) {
+  const mobile = normalizeToTenDigitMobile(mobileRaw);
+  if (!mobile) {
     await sendText(from, 'તમારો મોબાઇલ નંબર નોંધાયેલ નથી. કૃપા કરીને સાચો મોબાઇલ નંબર દાખલ કરો.');
     return;
   }
