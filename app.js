@@ -136,36 +136,83 @@ async function startSalesOrderPrint(from) {
   await sendText(from, 'Please enter the Sales Order document number.');
 }
 
-async function handleBillPropertyNo(from, propertyNoRaw) {
-  const propertyNo = propertyNoRaw.trim();
-  if (!propertyNo) {
-    await sendText(from, 'Please enter a valid Milkat No (property number).');
+async function fetchAndSendBillByPropertyNo(from, propertyNo) {
+  const response = await axios.get(`${VERO_BACKEND_URL}/api/bills/${encodeURIComponent(propertyNo)}.pdf`, {
+    responseType: 'arraybuffer',
+    validateStatus: () => true
+  });
+  if (response.status !== 200) return false;
+  await sendPdf(from, Buffer.from(response.data), `bill-${propertyNo}.pdf`);
+  return true;
+}
+
+async function startBillPrint(from) {
+  await sendText(from, 'નમસ્તે! ગ્રામ પંચાયત પોર્ટલમાં આપનું સ્વાગત છે,');
+  try {
+    const { data: villages } = await axios.get(`${VERO_BACKEND_URL}/api/villages/public`);
+    if (!villages || !villages.length) {
+      await sendText(from, 'Sorry, no Gram Panchayat is available right now. Please try again later.');
+      return;
+    }
+    userState.set(from, { step: 'awaiting_village_selection' });
+    await sendListMessage(
+      from,
+      'Please select your Gram Panchayat:',
+      'Select Panchayat',
+      villages.slice(0, 10).map((village) => ({
+        id: `bill_village_${village.id}`,
+        title: truncate(village.name, 24),
+        description: ''
+      }))
+    );
+  } catch (err) {
+    console.error('Failed to fetch village list:', err.message);
+    await sendText(from, 'Sorry, could not load the Gram Panchayat list right now. Please try again later.');
+  }
+}
+
+async function handleVillageSelection(from, villageId) {
+  userState.set(from, { step: 'awaiting_bill_mobile', villageId });
+  await sendText(from, 'કૃપા કરીને તમારો મોબાઇલ નંબર દાખલ કરો.');
+}
+
+async function handleBillMobileStep(from, mobileRaw, state) {
+  const mobile = mobileRaw.trim();
+  if (!/^\d{10}$/.test(mobile)) {
+    await sendText(from, 'તમારો મોબાઇલ નંબર નોંધાયેલ નથી. કૃપા કરીને સાચો મોબાઇલ નંબર દાખલ કરો.');
     return;
   }
 
   try {
-    const response = await axios.get(`${VERO_BACKEND_URL}/api/bills/${encodeURIComponent(propertyNo)}.pdf`, {
-      responseType: 'arraybuffer',
+    const response = await axios.get(`${VERO_BACKEND_URL}/api/taxpayers/lookup`, {
+      params: { mobile, villageId: state.villageId },
       validateStatus: () => true
     });
+
     if (response.status === 404) {
-      await sendText(from, `No bill found for Milkat No ${propertyNo}.`);
+      await sendText(from, 'તમારો મોબાઇલ નંબર નોંધાયેલ નથી. કૃપા કરીને સાચો મોબાઇલ નંબર દાખલ કરો.');
       return;
     }
     if (response.status !== 200) {
-      await sendText(from, 'Sorry, could not fetch the bill right now. Please try again later.');
+      await sendText(from, 'Sorry, could not look up your bill right now. Please try again later.');
+      userState.delete(from);
       return;
     }
-    await sendPdf(from, Buffer.from(response.data), `bill-${propertyNo}.pdf`);
-  } catch (err) {
-    console.error('Failed to fetch/send bill PDF:', err.message);
-    await sendText(from, 'Sorry, could not fetch the bill right now. Please try again later.');
-  }
-}
 
-async function startBillPrint(from) {
-  userState.set(from, { step: 'awaiting_bill_property_no' });
-  await sendText(from, 'Please enter your Milkat No (property number).');
+    const taxpayer = response.data;
+    const sent = await fetchAndSendBillByPropertyNo(from, taxpayer.propertyNo);
+    if (!sent) {
+      await sendText(from, 'Sorry, could not fetch your bill right now. Please try again later.');
+      userState.delete(from);
+      return;
+    }
+    await sendText(from, 'ગ્રામ પંચાયત પોર્ટલનો ઉપયોગ કરવા બદલ આભાર!');
+    userState.delete(from);
+  } catch (err) {
+    console.error('Failed to look up/send bill by mobile:', err.message);
+    await sendText(from, 'Sorry, could not look up your bill right now. Please try again later.');
+    userState.delete(from);
+  }
 }
 
 async function startCreateItem(from) {
@@ -670,9 +717,8 @@ async function handleIncomingText(from, text) {
     return;
   }
 
-  if (state?.step === 'awaiting_bill_property_no') {
-    userState.delete(from);
-    await handleBillPropertyNo(from, trimmed);
+  if (state?.step === 'awaiting_bill_mobile') {
+    await handleBillMobileStep(from, trimmed, state);
     return;
   }
 
@@ -842,6 +888,11 @@ async function handleButtonReply(from, buttonId) {
 async function handleListReply(from, listItemId) {
   if (listItemId.startsWith('sl_approval_')) {
     await showApprovalDetail(from, listItemId.slice('sl_approval_'.length));
+  } else if (listItemId.startsWith('bill_village_')) {
+    const state = userState.get(from);
+    if (state?.step === 'awaiting_village_selection') {
+      await handleVillageSelection(from, listItemId.slice('bill_village_'.length));
+    }
   }
 }
 
